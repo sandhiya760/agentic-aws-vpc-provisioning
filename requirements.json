@@ -1,0 +1,49 @@
+
+{
+  "project": "Agentic AI-Assisted AWS VPC Provisioning",
+  "region": "ap-south-1",
+  "requirements": [
+    {
+      "id": "REQ-001",
+      "description": "Provision one AWS VPC with CIDR 10.0.0.0/16.",
+      "expected_evidence": "An aws_vpc resource with the specified CIDR.",
+      "severity": "BLOCKER"
+    },
+    {
+      "id": "REQ-002",
+      "description": "Create two public subnets across two availability zones.",
+      "expected_evidence": "Two public subnet resources in distinct availability zones, with public IP assignment enabled.",
+      "severity": "BLOCKER"
+    },
+    {
+      "id": "REQ-003",
+      "description": "Create two private subnets across two availability zones.",
+      "expected_evidence": "Two private subnet resources in distinct availability zones.",
+      "severity": "BLOCKER"
+    },
+    {
+      "id": "REQ-004",
+      "description": "Allow public subnets to reach the internet through an Internet Gateway.",
+      "expected_evidence": "An Internet Gateway, a public route table with a default route to the gateway, and public subnet associations.",
+      "severity": "BLOCKER"
+    },
+    {
+      "id": "REQ-005",
+      "description": "Keep private subnets without a NAT gateway or default internet route.",
+      "expected_evidence": "No NAT gateway and no default internet route in the private route tables.",
+      "severity": "BLOCKER"
+    },
+    {
+      "id": "REQ-006",
+      "description": "Do not expose SSH or RDP to the entire IPv4 internet.",
+      "expected_evidence": "No security group ingress rule allowing TCP port 22 or 3389 from 0.0.0.0/0.",
+      "severity": "BLOCKER"
+    },
+    {
+      "id": "REQ-007",
+      "description": "Require review and human approval before applying infrastructure changes.",
+      "expected_evidence": "A mandatory requirements review, blocking policy checks, and explicit approval before Terraform apply.",
+      "severity": "BLOCKER"
+    }
+  ]
+}
