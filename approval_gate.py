@@ -1,8 +1,12 @@
+
+"""Fail-closed Terraform approval gate for AWS VPC provisioning."""
+
 import json
 import subprocess
 import sys
 from pathlib import Path
 
+from deterministic_requirements import check_plan
 from requirements_review import (
     build_review_input,
     load_json,
@@ -45,48 +49,61 @@ def run_command(command):
 
 
 def inspect_plan(plan):
-    """
-    Inspect selected Terraform plan risks.
-
-    Returns:
-        changes: resource change summaries
-        findings: security findings
-        destructive: deletion or replacement actions
-    """
-    changes = []
+    """Detect security risks and destructive resource actions."""
     findings = []
     destructive = []
+    changes = []
 
-    for resource in plan.get("resource_changes", []):
+    if not isinstance(plan, dict):
+        raise ValueError("Terraform plan must be a JSON object.")
+
+    resource_changes = plan.get("resource_changes")
+
+    if not isinstance(resource_changes, list):
+        raise ValueError("Terraform plan has no valid resource_changes list.")
+
+    for resource in resource_changes:
+        if not isinstance(resource, dict):
+            raise ValueError("Invalid resource change in Terraform plan.")
+
         address = resource.get("address", "unknown")
         resource_type = resource.get("type", "unknown")
-        change = resource.get("change", {})
+        change = resource.get("change") or {}
+
+        if not isinstance(change, dict):
+            raise ValueError(f"Invalid change details for {address}.")
+
         actions = change.get("actions", [])
 
-        changes.append(
-            {
-                "address": address,
-                "type": resource_type,
-                "actions": actions,
-            }
-        )
+        if not isinstance(actions, list):
+            raise ValueError(f"Invalid actions for {address}.")
+
+        changes.append({
+            "address": address,
+            "type": resource_type,
+            "actions": actions,
+        })
 
         if "delete" in actions:
-            destructive.append(
-                {
-                    "resource": address,
-                    "actions": actions,
-                }
-            )
+            destructive.append({
+                "resource": address,
+                "actions": actions,
+            })
 
         if resource_type != "aws_security_group":
             continue
 
         after = change.get("after") or {}
 
+        if not isinstance(after, dict):
+            continue
+
         for rule in after.get("ingress") or []:
+            if not isinstance(rule, dict):
+                continue
+
             cidrs = rule.get("cidr_blocks") or []
-            protocol = rule.get("protocol")
+            protocol = str(rule.get("protocol", "")).lower()
             from_port = rule.get("from_port")
             to_port = rule.get("to_port")
 
@@ -94,36 +111,32 @@ def inspect_plan(plan):
                 continue
 
             if protocol == "-1":
-                findings.append(
-                    {
-                        "severity": "HIGH",
-                        "resource": address,
-                        "issue": (
-                            "All protocols are allowed from the entire "
-                            "IPv4 internet."
-                        ),
-                    }
-                )
+                findings.append({
+                    "severity": "HIGH",
+                    "resource": address,
+                    "issue": (
+                        "All protocols are allowed from the entire "
+                        "IPv4 internet."
+                    ),
+                })
 
             elif (
-                protocol in ("tcp", "6")
-                and from_port is not None
-                and to_port is not None
+                protocol in {"tcp", "6"}
+                and isinstance(from_port, int)
+                and isinstance(to_port, int)
                 and (
                     from_port <= 22 <= to_port
                     or from_port <= 3389 <= to_port
                 )
             ):
-                findings.append(
-                    {
-                        "severity": "HIGH",
-                        "resource": address,
-                        "issue": (
-                            "SSH or RDP may be exposed to the entire "
-                            "IPv4 internet."
-                        ),
-                    }
-                )
+                findings.append({
+                    "severity": "HIGH",
+                    "resource": address,
+                    "issue": (
+                        "SSH or RDP may be exposed to the entire "
+                        "IPv4 internet."
+                    ),
+                })
 
     return changes, findings, destructive
 
@@ -171,10 +184,9 @@ def safe_test_mode(filename):
 
 def run_mandatory_requirements_review(plan):
     """
-    Review requirements against Terraform and gate implementation.
+    Run the mandatory AI requirements review.
 
-    Any AI error, malformed response, or unresolved requirement blocks
-    the deployment. This function never runs Terraform apply.
+    Invalid responses, unresolved gaps, and AI errors must block apply.
     """
     requirements_document = load_json(REQUIREMENTS_FILE)
     terraform_source = TERRAFORM_FILE.read_text(encoding="utf-8")
@@ -185,8 +197,7 @@ def run_mandatory_requirements_review(plan):
         plan,
     )
 
-    # Supply process evidence so REQ-007 can be assessed against the
-    # actual approval and requirements-review implementation.
+    # Evidence used to assess the review and approval implementation.
     review_input["approval_gate_source"] = (
         APPROVAL_GATE_FILE.read_text(encoding="utf-8")
     )
@@ -195,11 +206,9 @@ def run_mandatory_requirements_review(plan):
     )
 
     print("\n=== Mandatory AI Requirements Review ===")
-    print("Comparing requirements with Terraform and review-gate evidence.")
+    print("Comparing requirements against Terraform and plan evidence.")
 
     result = review_requirements(review_input)
-
-    # Validate the response independently; do not trust AI status alone.
     validate_review(result, requirements_document)
 
     print(json.dumps(result, indent=2))
@@ -209,10 +218,11 @@ def run_mandatory_requirements_review(plan):
             "BLOCKED: AI requirements review reported unresolved gaps."
         )
 
-    print("Requirements review passed.")
+    print("AI requirements review passed.")
 
 
 def main():
+    """Generate a plan, run all gates, and request approval before apply."""
     if len(sys.argv) == 3 and sys.argv[1] == "--test-plan-json":
         safe_test_mode(sys.argv[2])
         return
@@ -223,7 +233,7 @@ def main():
             "[--test-plan-json PLAN.json]"
         )
 
-    # Phase 1: Generate and inspect a saved Terraform plan.
+    # Phase 1: Generate a saved plan.
     run_command(["terraform", "plan", "-out=tfplan"])
 
     plan_json = run_command(
@@ -237,24 +247,45 @@ def main():
             f"BLOCKED: Terraform returned invalid JSON: {error}"
         ) from error
 
-    changes, findings, destructive = inspect_plan(plan)
+    # Phase 2: Inspect security risks and destructive actions.
+    changes, security_findings, destructive = inspect_plan(plan)
 
     print("\n=== Deterministic Security Gate ===")
     print(f"Resources in plan: {len(changes)}")
-    print(
-        "High-severity findings: "
-        f"{sum(item['severity'] == 'HIGH' for item in findings)}"
-    )
+    print(f"Security findings: {len(security_findings)}")
     print(f"Deletion/replacement actions: {len(destructive)}")
 
-    # Phase 2: Block known risks before making an AI request.
-    if findings or destructive:
-        print(
-            "BLOCKED: Security findings or destructive actions "
-            "require investigation."
+    # Phase 3: Verify mandatory infrastructure requirements.
+    # If a check raises an exception, fail closed.
+    try:
+        requirements_findings = check_plan(plan)
+    except Exception as error:
+        raise SystemExit(
+            "BLOCKED: Deterministic requirements checks failed "
+            f"({type(error).__name__}). No apply was performed."
+        ) from error
+
+    if not isinstance(requirements_findings, list):
+        raise SystemExit(
+            "BLOCKED: Requirements checker returned an invalid result."
         )
 
-        for finding in findings:
+    print("\n=== Deterministic Requirements Gate ===")
+
+    for finding in requirements_findings:
+        print(f"[BLOCKED] {finding}")
+
+    if not requirements_findings:
+        print("All deterministic requirements checks passed.")
+
+    # Block before AI review or human approval.
+    if security_findings or destructive or requirements_findings:
+        print(
+            "\nBLOCKED: Security, requirements, or destructive-change "
+            "checks failed. No AI review or apply will proceed."
+        )
+
+        for finding in security_findings:
             print(
                 f"[{finding['severity']}] {finding['resource']}: "
                 f"{finding['issue']}"
@@ -268,7 +299,7 @@ def main():
 
         raise SystemExit(2)
 
-    # Phase 3: Mandatory AI review. Fail closed on any exception.
+    # Phase 4: Mandatory AI review.
     try:
         run_mandatory_requirements_review(plan)
     except SystemExit:
@@ -279,18 +310,15 @@ def main():
             f"({type(error).__name__}). No apply was performed."
         ) from error
 
-    # Phase 4: No changes means no apply is needed.
-    if all(
-        item["actions"] == ["no-op"]
-        for item in changes
-    ):
+    # Phase 5: A no-op plan needs no apply.
+    if all(item["actions"] == ["no-op"] for item in changes):
         print(
             "No infrastructure changes are proposed. "
             "Nothing to apply."
         )
         return
 
-    # Phase 5: Require explicit human approval.
+    # Phase 6: Explicit human approval.
     approval = input(
         "\nType APPLY to approve this saved plan: "
     ).strip()
@@ -299,7 +327,7 @@ def main():
         print("Approval not granted. No infrastructure changes applied.")
         return
 
-    # Apply the exact saved plan that was reviewed.
+    # Phase 7: Apply the exact saved plan that passed the gates.
     run_command(["terraform", "apply", "tfplan"])
 
 

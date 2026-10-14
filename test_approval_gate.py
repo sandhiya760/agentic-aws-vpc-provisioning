@@ -1,3 +1,7 @@
+
+import json
+import sys
+
 import pytest
 
 import approval_gate
@@ -5,14 +9,73 @@ from approval_gate import (
     inspect_plan,
     run_mandatory_requirements_review,
 )
+from test_deterministic_requirements import valid_plan
+
+
+def configure_review_test(monkeypatch, review_result):
+    """Configure the requirements review without calling Gemini or AWS."""
+
+    requirements_document = {
+        "project": "Test project",
+        "requirements": [
+            {
+                "id": "REQ-001",
+                "description": "Create the required VPC.",
+                "severity": "BLOCKER",
+            }
+        ],
+    }
+
+    class FakeFile:
+        def __init__(self, content):
+            self.content = content
+
+        def read_text(self, encoding=None):
+            return self.content
+
+    monkeypatch.setattr(
+        approval_gate,
+        "load_json",
+        lambda path: requirements_document,
+    )
+    monkeypatch.setattr(
+        approval_gate,
+        "TERRAFORM_FILE",
+        FakeFile('resource "aws_vpc" "test" {}'),
+    )
+    monkeypatch.setattr(
+        approval_gate,
+        "APPROVAL_GATE_FILE",
+        FakeFile("# simulated approval gate"),
+    )
+    monkeypatch.setattr(
+        approval_gate,
+        "REVIEWER_FILE",
+        FakeFile("# simulated requirements reviewer"),
+    )
+    monkeypatch.setattr(
+        approval_gate,
+        "build_review_input",
+        lambda requirements, source, plan: {
+            "requirements": requirements["requirements"],
+            "terraform_source": source,
+            "resource_changes": [],
+        },
+    )
+    monkeypatch.setattr(
+        approval_gate,
+        "review_requirements",
+        lambda review_input: review_result,
+    )
 
 
 def test_public_ssh_access_is_detected():
-    """Public SSH access should produce a HIGH-severity finding."""
-    unsafe_plan = {
+    """Public SSH access must be reported as high severity."""
+
+    plan = {
         "resource_changes": [
             {
-                "address": "aws_security_group.test",
+                "address": "aws_security_group.example",
                 "type": "aws_security_group",
                 "change": {
                     "actions": ["create"],
@@ -31,140 +94,75 @@ def test_public_ssh_access_is_detected():
         ]
     }
 
-    changes, findings, destructive = inspect_plan(unsafe_plan)
+    _, findings, _ = inspect_plan(plan)
 
-    assert len(changes) == 1
-    assert any(item["severity"] == "HIGH" for item in findings)
-    assert destructive == []
+    assert findings
+    assert findings[0]["severity"] == "HIGH"
+    assert "SSH or RDP" in findings[0]["issue"]
 
 
 def test_resource_deletion_is_detected():
-    """A deletion action should be detected by the approval gate."""
-    deletion_plan = {
+    """Deleting a resource must be identified as destructive."""
+
+    plan = {
         "resource_changes": [
             {
-                "address": "aws_vpc.test",
+                "address": "aws_vpc.example",
                 "type": "aws_vpc",
                 "change": {
                     "actions": ["delete"],
-                    "before": {"id": "vpc-simulated"},
+                    "before": {"cidr_block": "10.0.0.0/16"},
                     "after": None,
                 },
             }
         ]
     }
 
-    changes, findings, destructive = inspect_plan(deletion_plan)
+    _, _, destructive = inspect_plan(plan)
 
-    assert len(changes) == 1
-    assert findings == []
     assert len(destructive) == 1
-
-
-def configure_review_test(monkeypatch, review_result):
-    """Configure a review test without files, Gemini, or AWS access."""
-
-    requirements_document = {
-        "project": "Test project",
-        "region": "ap-south-1",
-        "requirements": [
-            {
-                "id": "REQ-001",
-                "description": "Create a VPC.",
-                "expected_evidence": "An AWS VPC resource.",
-                "severity": "BLOCKER",
-            }
-        ],
-    }
-
-    class FakeFile:
-        def __init__(self, content):
-            self.content = content
-
-        def read_text(self, encoding=None):
-            return self.content
-
-    monkeypatch.setattr(
-        approval_gate,
-        "load_json",
-        lambda path: requirements_document,
-    )
-
-    monkeypatch.setattr(
-        approval_gate,
-        "TERRAFORM_FILE",
-        FakeFile('resource "aws_vpc" "test" {}'),
-    )
-
-    monkeypatch.setattr(
-        approval_gate,
-        "APPROVAL_GATE_FILE",
-        FakeFile("# simulated approval gate"),
-    )
-
-    monkeypatch.setattr(
-        approval_gate,
-        "REVIEWER_FILE",
-        FakeFile("# simulated requirements reviewer"),
-    )
-
-    monkeypatch.setattr(
-        approval_gate,
-        "build_review_input",
-        lambda requirements, source, plan: {
-            "requirements": requirements["requirements"],
-            "terraform_source": source,
-            "resource_changes": [],
-        },
-    )
-
-    monkeypatch.setattr(
-        approval_gate,
-        "review_requirements",
-        lambda review_input: review_result,
-    )
+    assert destructive[0]["resource"] == "aws_vpc.example"
 
 
 def test_requirements_review_blocks_when_ai_reports_gap(monkeypatch):
-    """An unresolved blocker must prevent the requirements review passing."""
-    blocked_review = {
+    """An unresolved blocker must prevent the review from passing."""
+
+    result = {
         "overall_status": "BLOCK",
         "results": [
             {
                 "requirement_id": "REQ-001",
                 "status": "GAP",
-                "evidence": "Simulated missing VPC evidence.",
-                "explanation": "Simulated test failure.",
+                "evidence": "The required VPC was not verified.",
+                "explanation": "Required evidence is missing.",
             }
         ],
         "blocking_gaps": ["REQ-001"],
     }
 
-    configure_review_test(monkeypatch, blocked_review)
+    configure_review_test(monkeypatch, result)
 
     with pytest.raises(SystemExit, match="unresolved gaps"):
-        run_mandatory_requirements_review({"resource_changes": []})
+        run_mandatory_requirements_review(valid_plan())
 
 
 def test_requirements_review_blocks_invalid_ai_response(monkeypatch):
-    """An incomplete AI response must fail closed."""
-    invalid_review = {
+    """An incomplete AI response must be rejected."""
+
+    result = {
         "overall_status": "PASS",
         "results": [],
         "blocking_gaps": [],
     }
 
-    configure_review_test(monkeypatch, invalid_review)
+    configure_review_test(monkeypatch, result)
 
-    with pytest.raises(
-        ValueError,
-        match="Review is missing one or more requirements",
-    ):
-        run_mandatory_requirements_review({"resource_changes": []})
+    with pytest.raises(ValueError, match="missing one or more requirements"):
+        run_mandatory_requirements_review(valid_plan())
+
+
 def test_failed_requirements_review_never_applies(monkeypatch):
-    """A failed requirements review must stop the deployment flow."""
-    import json
-    import sys
+    """A failed requirements review must prevent Terraform apply."""
 
     commands = []
 
@@ -172,24 +170,15 @@ def test_failed_requirements_review_never_applies(monkeypatch):
         commands.append(command)
 
         if command == ["terraform", "show", "-json", "tfplan"]:
-            return json.dumps(
-                {
-                    "resource_changes": [
-                        {
-                            "address": "aws_vpc.test",
-                            "type": "aws_vpc",
-                            "change": {
-                                "actions": ["create"],
-                                "after": {"cidr_block": "10.0.0.0/16"},
-                            },
-                        }
-                    ]
-                }
-            )
+            return json.dumps(valid_plan())
 
         return ""
 
-    monkeypatch.setattr(approval_gate, "run_command", fake_run_command)
+    monkeypatch.setattr(
+        approval_gate,
+        "run_command",
+        fake_run_command,
+    )
 
     def fake_requirements_review(plan):
         raise SystemExit("BLOCKED: Simulated requirements gap.")
@@ -210,9 +199,7 @@ def test_failed_requirements_review_never_applies(monkeypatch):
 
 
 def test_gemini_failure_never_applies(monkeypatch):
-    """An AI service failure must stop the deployment flow."""
-    import json
-    import sys
+    """An AI service failure must prevent Terraform apply."""
 
     commands = []
 
@@ -220,11 +207,15 @@ def test_gemini_failure_never_applies(monkeypatch):
         commands.append(command)
 
         if command == ["terraform", "show", "-json", "tfplan"]:
-            return json.dumps({"resource_changes": []})
+            return json.dumps(valid_plan())
 
         return ""
 
-    monkeypatch.setattr(approval_gate, "run_command", fake_run_command)
+    monkeypatch.setattr(
+        approval_gate,
+        "run_command",
+        fake_run_command,
+    )
 
     def fake_requirements_review(plan):
         raise RuntimeError("Simulated Gemini failure.")
@@ -236,7 +227,10 @@ def test_gemini_failure_never_applies(monkeypatch):
     )
     monkeypatch.setattr(sys, "argv", ["approval_gate.py"])
 
-    with pytest.raises(SystemExit, match="Mandatory requirements review failed"):
+    with pytest.raises(
+        SystemExit,
+        match="Mandatory requirements review failed",
+    ):
         approval_gate.main()
 
     assert ["terraform", "apply", "tfplan"] not in commands
