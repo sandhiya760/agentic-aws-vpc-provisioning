@@ -1,0 +1,33 @@
+
+# Secrets
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Local generated files
+tfplan
+plan.json
+test_plan.json
+
+# Additional Terraform files
+*.tfstate.backup
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+test_destroy_plan.json
+
+# Security
+*.pem
+*.key
