@@ -1,150 +1,170 @@
-# Agentic AI-Assisted AWS VPC Provisioning
+# Agentic AI-Assisted AWS VPC Provisioning & DevOps Automation
 
-An AI-assisted DevOps project that provisions AWS networking with Terraform, performs deterministic security checks using Python, and uses Google Gemini to explain infrastructure changes before human approval.
+An infrastructure automation project that combines **Terraform, AWS, GitHub Actions, Python, and Gemini AI** to validate infrastructure requirements, detect security risks, review Terraform plans, and control deployments through a human approval gate.
 
 ## Overview
 
-This project demonstrates Infrastructure as Code (IaC), cloud networking, automated security checks, AI-assisted plan review, and continuous integration with GitHub Actions.
+This project implements a security-focused Infrastructure as Code (IaC) workflow for provisioning an AWS Virtual Private Cloud (VPC). It integrates deterministic Python validation with AI-assisted requirements review to help identify configuration gaps before infrastructure changes are applied.
 
-The goal is to make infrastructure changes easier to review while keeping the final deployment decision under human control.
+The CI/CD pipeline authenticates to AWS using GitHub Actions OIDC, validates Terraform configurations, runs automated tests, reviews the execution plan, and skips deployment when no infrastructure changes are detected.
 
 ## Architecture
 
-- **AWS:** VPC and networking resources in the Mumbai region (`ap-south-1`)
-- **Terraform:** Infrastructure provisioning and state management
-- **Python:** Deterministic security checks and approval-gate logic
-- **Google Gemini:** AI-assisted explanation of planned infrastructure changes
-- **GitHub Actions:** Automated Terraform validation and Python testing
-- **Amazon S3:** Encrypted, versioned remote Terraform state
+```text
+Developer
+    |
+    v
+GitHub Repository
+    |
+    v
+GitHub Actions CI/CD
+    |
+    +--> Automated Python Tests
+    |
+    +--> AWS OIDC Authentication
+    |
+    +--> Terraform Init & Validate
+    |
+    +--> Terraform Plan
+    |
+    +--> Deterministic Security Checks
+    |
+    +--> Gemini AI Requirements Review
+    |
+    v
+Reviewed Plan
+    |
+    +--> No Changes --> Skip Apply
+    |
+    +--> Changes Detected
+              |
+              v
+       Human Approval Gate
+              |
+              v
+       Terraform Apply
+              |
+              v
+         AWS VPC
+```
 
-## Infrastructure
+## AWS Infrastructure
 
-The Terraform configuration provisions:
+The Terraform configuration defines the following resources:
 
-- One VPC with CIDR `10.0.0.0/16`
-- Two public subnets across availability zones
-- Two private subnets across availability zones
-- An Internet Gateway and public routing
-- Separate private route tables without NAT gateways
-- An application security group
+- **Amazon VPC:** CIDR block `10.0.0.0/16`
+- **Public subnets:** Two subnets across distinct Availability Zones
+- **Private subnets:** Two subnets across distinct Availability Zones
+- **Internet Gateway:** Enables internet routing for public subnets
+- **Route tables:** Separate public and private routing configurations
+- **Security group:** No inbound rules by default
+- **Amazon S3:** Remote Terraform state storage with encryption, versioning, public-access blocking, and state locking
 
-No EC2 instances or NAT gateways are provisioned by this configuration.
+Private subnets are configured without a NAT Gateway or default internet route, reducing unnecessary exposure and infrastructure costs.
 
-## Security and Approval Workflow
+## Technology Stack
 
-1. Terraform generates an infrastructure plan.
-2. Python checks selected security-group ingress patterns and destructive actions.
-3. Google Gemini explains the proposed changes when an AI review is needed.
-4. The approval gate blocks detected high-risk ingress patterns and destructive changes.
-5. A human must explicitly approve an eligible plan before Terraform apply.
+- **Cloud:** Amazon Web Services (AWS)
+- **Infrastructure as Code:** Terraform
+- **Automation:** Python
+- **CI/CD:** GitHub Actions
+- **AI-assisted review:** Google Gemini API
+- **Testing:** pytest
+- **Authentication:** GitHub Actions OIDC and AWS IAM roles
+- **State management:** Amazon S3 with native Terraform state locking
 
-The security checks are intentionally limited in scope. They are not a complete AWS security audit, and AI-generated recommendations must be verified independently.
+## Security and Governance
 
-## Continuous Integration
+### 1. Deterministic Infrastructure Validation
+Python checks Terraform plan evidence against defined requirements, including VPC CIDR, subnet segmentation, routing, and security-group exposure.
 
-GitHub Actions currently runs:
+### 2. AI-Assisted Requirements Review
+Gemini reviews infrastructure requirements against Terraform configuration and plan evidence. Invalid or failed reviews block the workflow rather than allowing an unverified plan to proceed.
 
-- Terraform formatting checks
-- Terraform initialization without the remote backend
-- Terraform configuration validation
-- Automated Python tests
+### 3. Secure GitHub-to-AWS Authentication
+GitHub Actions uses OpenID Connect (OIDC) to obtain temporary AWS credentials instead of storing long-lived AWS access keys in GitHub secrets.
 
-The CI workflow does not deploy infrastructure or require AWS credentials.
+### 4. Human Approval Before Deployment
+Infrastructure-changing plans must pass through a protected GitHub environment requiring human approval before the apply job can proceed.
+
+### 5. Remote Terraform State
+Terraform state is stored in Amazon S3 with encryption, versioning, public-access blocking, and state locking to support consistent infrastructure management.
+
+### 6. Cost-Conscious Networking
+The design avoids a NAT Gateway and private-subnet default internet routes. No EC2 instances are required for the core VPC provisioning workflow.
+
+## CI/CD Workflow
+
+The deployment workflow performs these steps:
+
+1. Checks out the reviewed repository commit.
+2. Installs Terraform and Python dependencies.
+3. Runs automated tests.
+4. Authenticates to AWS using OIDC.
+5. Initializes and validates Terraform.
+6. Generates a Terraform execution plan.
+7. Runs deterministic security and requirements checks.
+8. Performs the mandatory Gemini-assisted requirements review.
+9. Determines whether the reviewed plan changes infrastructure.
+10. Skips the apply stage if no changes are detected.
+11. Requires protected-environment approval before applying a plan containing infrastructure changes.
+
+## Test Results
+
+**Latest verified workflow:** Terraform CD – Reviewed Deployment, run #8.
+
+- GitHub Actions status: Success
+- Workflow duration: 56 seconds
+- Automated Python tests: 29 passed
+- Terraform validation: Passed
+- Deterministic requirements checks: Passed
+- Gemini-assisted requirements review: Passed
+- Infrastructure change detection: Completed successfully
+- Apply stage: Skipped because no infrastructure changes were detected
+
+The successful run validates the no-change path of the pipeline. A successful infrastructure-changing apply has not been demonstrated by this run.
 
 ## Project Structure
 
 ```text
-aws-vpc-agent/
+agentic-aws-vpc-provisioning/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml
-├── approval_gate.py
-├── check_gemini_connection.py
+│       └── deploy.yml
 ├── main.tf
+├── requirements.json
+├── approval_gate.py
+├── deterministic_requirements.py
+├── requirements_review.py
 ├── review_plan.py
-├── review_plan_ai.py
-├── unified_reviewer.py
 ├── test_approval_gate.py
+├── test_deterministic_requirements.py
+├── test_requirements_review.py
 ├── test_security_review.py
-├── .gitignore
 └── README.md
 ```
 
-## Prerequisites
+## Key Learnings
 
-- Terraform CLI
-- AWS CLI and appropriately scoped AWS credentials
-- Python 3.13 or compatible version
-- A Google Gemini API key for AI-assisted reviews
-- Git
-
-## Local Setup
-
-1. Clone the repository.
-2. Install the Python dependencies:
-
-   ```bash
-   python -m pip install pytest python-dotenv google-genai
-   ```
-
-3. Configure AWS credentials securely if you intend to work with real infrastructure.
-4. Create a local `.env` file for AI reviews:
-
-   ```text
-   GEMINI_API_KEY=your_api_key_here
-   GEMINI_MODEL=gemini-3.1-flash-lite
-   ```
-
-   Never commit `.env` or expose your API key.
-
-5. Validate the Terraform configuration:
-
-   ```bash
-   terraform fmt -check -recursive
-   terraform init -backend=false
-   terraform validate
-   ```
-
-6. Run the automated tests:
-
-   ```bash
-   python -m pytest -v
-   ```
-
-## Safe Testing
-
-Test the approval gate using simulated Terraform plan JSON:
-
-```bash
-python approval_gate.py --test-plan-json test_plan.json
-python approval_gate.py --test-plan-json test_destroy_plan.json
-```
-
-These test cases should be used only with simulated JSON files. They do not apply infrastructure changes. An intentionally unsafe test is expected to be blocked.
-
-## Cost and Safety Notes
-
-- The configured VPC and networking resources do not include NAT gateways or compute instances.
-- AWS charges can still apply to other services and resources, including remote state storage.
-- Review current AWS pricing and account budgets before making infrastructure changes.
-- Never run Terraform apply against a real environment without reviewing the plan and confirming authorization.
-
-## Limitations
-
-- Security checks cover selected IPv4 security-group ingress patterns and destructive actions only.
-- Gemini provides recommendations, not a guarantee of security.
-- CI validates the configuration and runs local tests; it does not verify the live AWS environment.
-- Human approval in the local prototype is not equivalent to a protected, multi-person production approval system.
+- Designing public and private subnet architectures in AWS.
+- Implementing Infrastructure as Code using Terraform.
+- Managing remote state and state locking.
+- Building CI/CD pipelines with GitHub Actions.
+- Configuring OIDC-based AWS authentication.
+- Writing deterministic infrastructure security checks.
+- Integrating AI-assisted review with fail-closed validation.
+- Implementing human approval gates and conditional deployment logic.
+- Testing infrastructure automation using pytest.
 
 ## Future Improvements
 
-- Add an optional Gemini review stage to GitHub Actions.
-- Configure AWS authentication through GitHub OIDC and least-privilege IAM.
-- Add stronger Terraform security policies and broader automated tests.
-- Introduce protected deployment environments with explicit approval.
+- Add infrastructure drift detection.
+- Expand automated policy checks for additional AWS security controls.
+- Introduce automated documentation and plan summaries.
+- Add monitoring and operational visibility for deployed workloads.
 
-## Author
+## Repository
 
-Sandhiya S
+[View the source code on GitHub](https://github.com/sandhiya760/agentic-aws-vpc-provisioning)
 
-Built as a hands-on project exploring Cloud Engineering, DevOps automation, Infrastructure as Code, and AI-assisted security review.
+**Disclaimer:** This project is a learning and portfolio project. Review IAM permissions, credentials, costs, and security controls before adapting it for production use.
