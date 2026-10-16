@@ -1,3 +1,4 @@
+
 name: Terraform CD - Reviewed Deployment
 
 on:
@@ -16,6 +17,7 @@ jobs:
     name: Plan, validate and review
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
     outputs:
       has_changes: ${{ steps.plan_status.outputs.has_changes }}
       reviewed_sha: ${{ steps.commit.outputs.sha }}
@@ -46,6 +48,31 @@ jobs:
       - name: Run automated tests
         run: python -m pytest -v
 
+      - name: Diagnose GitHub OIDC claims
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          response=$(curl -fsS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+
+          token=$(printf '%s' "$response" | python -c \
+            'import json,sys; print(json.load(sys.stdin)["value"])')
+
+          TOKEN="$token" python - <<'PY'
+          import os
+          import json
+          import base64
+
+          payload = os.environ["TOKEN"].split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+
+          for key in ("sub", "aud", "repository", "ref"):
+              print(f"{key}: {claims.get(key)}")
+          PY
+
       - name: Configure read-only planning credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -66,11 +93,21 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python approval_gate.py --review-only
 
+      - name: Verify reviewed plan exists
+        shell: bash
+        run: |
+          if [ ! -f tfplan ]; then
+            echo "::error::The review step did not create tfplan."
+            echo "Update approval_gate.py or the review command to generate the saved plan before continuing."
+            exit 1
+          fi
+
       - name: Determine whether the reviewed plan changes infrastructure
         id: plan_status
         shell: bash
         run: |
           terraform show -json tfplan > plan.json
+
           python - <<'PY'
           import json
           import os
@@ -125,6 +162,7 @@ jobs:
           ref: ${{ needs.plan.outputs.reviewed_sha }}
 
       - name: Verify checked-out commit
+        shell: bash
         run: |
           test "$(git rev-parse HEAD)" = "${{ needs.plan.outputs.reviewed_sha }}"
 
