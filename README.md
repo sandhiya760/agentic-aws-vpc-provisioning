@@ -170,3 +170,5 @@ git diff --check
 ## Repository
 
 [View the project on GitHub](https://github.com/sandhiya760/agentic-aws-vpc-provisioning)
+
+> **Disclaimer:** This is a learning and portfolio project. Review IAM permissions, credentials, costs, and security controls before adapting it for production use.
