@@ -32,10 +32,10 @@ resource "aws_vpc" "main" {
   enable_dns_hostnames = true
 
   tags = {
-    Name        = "agentic-vpc"
-    Environment = "development"
-    ManagedBy   = "Terraform"
-    ApprovalDemo  = "manual-approval-test"
+    Name         = "agentic-vpc"
+    Environment  = "development"
+    ManagedBy    = "Terraform"
+    ApprovalDemo = "manual-approval-test"
   }
 }
 
