@@ -231,10 +231,17 @@ def create_and_review_plan():
     except SystemExit:
         raise
     except Exception as error:
-        raise SystemExit(
+        print(
             "BLOCKED: Mandatory requirements review failed "
+            f"({type(error).__name__}): {error}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(
+            f"BLOCKED: Mandatory requirements review failed "
             f"({type(error).__name__}). No apply was performed."
         ) from error
+
     # Phase 5: Report whether this plan has actual changes.
     no_changes = all(
         item["actions"] == ["no-op"] for item in changes
