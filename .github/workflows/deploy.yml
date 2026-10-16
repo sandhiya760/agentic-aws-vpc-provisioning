@@ -41,7 +41,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install test dependencies
-        run: python -m pip install pytest python-dotenv
+        run: python -m pip install pytest python-dotenv google-genai
 
       - name: Run automated tests
         run: python -m pytest -v
