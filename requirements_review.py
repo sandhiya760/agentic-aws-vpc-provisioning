@@ -196,109 +196,114 @@ Evidence:
 
 """
 
-    response = client.models.generate_content(
+    try:
+        response = client.models.generate_content(
 
-        model=model_name,
+            model=model_name,
 
-        contents=prompt,
+            contents=prompt,
 
-        config={
+            config={
 
-            "response_mime_type": "application/json",
+                "response_mime_type": "application/json",
 
-            "response_schema": {
+                "response_schema": {
 
-                "type": "OBJECT",
+                    "type": "OBJECT",
 
-                "properties": {
+                    "properties": {
 
-                    "overall_status": {
+                        "overall_status": {
 
-                        "type": "STRING",
+                            "type": "STRING",
 
-                        "enum": ["PASS", "BLOCK"],
+                            "enum": ["PASS", "BLOCK"],
 
-                    },
+                        },
 
-                    "results": {
+                        "results": {
 
-                        "type": "ARRAY",
+                            "type": "ARRAY",
 
-                        "items": {
+                            "items": {
 
-                            "type": "OBJECT",
+                                "type": "OBJECT",
 
-                            "properties": {
+                                "properties": {
 
-                                "requirement_id": {"type": "STRING"},
+                                    "requirement_id": {"type": "STRING"},
 
-                                "status": {
+                                    "status": {
 
-                                    "type": "STRING",
+                                        "type": "STRING",
 
-                                    "enum": [
+                                        "enum": [
 
-                                        "SATISFIED",
+                                            "SATISFIED",
 
-                                        "GAP",
+                                            "GAP",
 
-                                        "UNVERIFIABLE",
+                                            "UNVERIFIABLE",
 
-                                    ],
+                                        ],
+
+                                    },
+
+                                    "evidence": {"type": "STRING"},
+
+                                    "explanation": {"type": "STRING"},
 
                                 },
 
-                                "evidence": {"type": "STRING"},
+                                "required": [
 
-                                "explanation": {"type": "STRING"},
+                                    "requirement_id",
+
+                                    "status",
+
+                                    "evidence",
+
+                                    "explanation",
+
+                                ],
 
                             },
 
-                            "required": [
+                        },
 
-                                "requirement_id",
+                        "blocking_gaps": {
 
-                                "status",
+                            "type": "ARRAY",
 
-                                "evidence",
-
-                                "explanation",
-
-                            ],
+                            "items": {"type": "STRING"},
 
                         },
 
                     },
 
-                    "blocking_gaps": {
+                    "required": [
 
-                        "type": "ARRAY",
+                        "overall_status",
 
-                        "items": {"type": "STRING"},
+                        "results",
 
-                    },
+                        "blocking_gaps",
+
+                    ],
 
                 },
 
-                "required": [
+                "temperature": 0.1,
 
-                    "overall_status",
-
-                    "results",
-
-                    "blocking_gaps",
-
-                ],
+                "max_output_tokens": 3000,
 
             },
 
-            "temperature": 0.1,
-
-            "max_output_tokens": 3000,
-
-        },
-
-    )
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Gemini API request failed ({type(exc).__name__}): {exc}"
+        ) from exc
 
     if not response.text:
 
