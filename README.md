@@ -12,11 +12,27 @@ The problem addressed by this project is:
 
 ## Solution
 
-This project implements a GitHub Actions CI/CD workflow around Terraform. It runs automated tests, authenticates to AWS using GitHub Actions OpenID Connect (OIDC), validates Terraform, creates a plan, runs deterministic Python checks, and invokes **Google Gemini as the Large Language Model (LLM)** for requirements review. The review response is validated before the workflow continues. If checks or the mandatory AI review fail, the workflow blocks progression. If the plan has changes, the protected `production` environment provides a human approval gate before apply. If no changes are detected, apply is skipped.
+This project implements a GitHub Actions CI/CD workflow around Terraform. It runs automated tests, validates Terraform, creates a plan, runs deterministic Python checks, and invokes **Google Gemini as the Large Language Model (LLM)** for requirements review. The review response is validated before the workflow continues.
+
+The workflow uses GitHub Actions OpenID Connect (OIDC) to authenticate to AWS with temporary credentials. If checks or the mandatory AI review fail, the workflow blocks progression. If the plan contains changes, the protected `production` environment provides a human approval gate before apply. If no changes are detected, the apply job is skipped.
 
 ## Architecture
 
-![Architecture diagram](assets/architecture.png)
+![Agentic AI-Assisted AWS VPC Provisioning Architecture](https://github.com/sandhiya760/agentic-aws-vpc-provisioning/raw/main/assets/architecture.png)
+
+[View architecture diagram](https://github.com/sandhiya760/agentic-aws-vpc-provisioning/blob/main/assets/architecture.png)
+
+The workflow follows this sequence:
+
+1. Code changes trigger the CI/CD workflow.
+2. Terraform formatting, validation, and Python tests run.
+3. Terraform generates a saved execution plan.
+4. Deterministic Python checks evaluate infrastructure and security requirements.
+5. Gemini performs AI-assisted requirements review.
+6. The review output is validated before progression.
+7. The workflow determines whether infrastructure changes exist.
+8. If changes exist, the reviewed plan is saved and deployment requires approval through the protected GitHub `production` environment.
+9. The deployment job authenticates to AWS using OIDC, verifies the saved plan checksum, and applies the reviewed plan.
 
 ## Role of the LLM: Google Gemini
 
@@ -33,7 +49,7 @@ The LLM is **not** responsible for provisioning resources or independently autho
 |---|---|
 | Google Gemini LLM | AI-assisted comparison of requirements with infrastructure evidence |
 | Deterministic Python checks | Enforce explicit networking and security rules |
-| Review validation | Rejects malformed or incomplete review output and unsatisfied blockers |
+| Review validation | Reject malformed or incomplete review output and unsatisfied blockers |
 | Human approval | Gates infrastructure-changing deployment |
 | Terraform | Plans and applies infrastructure changes |
 
@@ -72,15 +88,17 @@ Private subnets are configured without a NAT Gateway or default internet route. 
 1. Check out the repository commit.
 2. Install Terraform and Python dependencies.
 3. Run automated Python tests.
-4. Authenticate to AWS using GitHub OIDC and temporary credentials.
-5. Initialize and validate Terraform.
-6. Generate the Terraform execution plan.
-7. Run deterministic infrastructure and security checks.
-8. Run the mandatory Gemini LLM requirements review.
-9. Validate the structured review result and blocking requirements.
-10. Detect whether the plan contains infrastructure changes.
-11. Skip apply when no changes are detected.
-12. When changes are detected, require approval through the protected `production` GitHub environment before applying the reviewed plan.
+4. Initialize and validate Terraform.
+5. Generate the Terraform execution plan.
+6. Run deterministic infrastructure and security checks.
+7. Run the mandatory Gemini LLM requirements review.
+8. Validate the structured review result and blocking requirements.
+9. Detect whether the plan contains infrastructure changes.
+10. Skip apply when no changes are detected.
+11. When changes are detected, save the reviewed plan and its checksum.
+12. Require approval through the protected `production` GitHub environment.
+13. Authenticate to AWS using OIDC.
+14. Verify the saved plan checksum and apply the reviewed plan.
 
 ## Security and Governance
 
@@ -88,16 +106,19 @@ Private subnets are configured without a NAT Gateway or default internet route. 
 - **Fail-closed review:** A failed or invalid mandatory requirements review blocks progression.
 - **Deterministic validation:** Explicit checks assess requirements such as VPC CIDR, subnet segmentation, routing, NAT/default-route expectations, and SSH exposure.
 - **Human approval:** A protected GitHub environment is required before an infrastructure-changing plan can be applied.
+- **Reviewed-plan integrity:** The deployment job verifies the saved Terraform plan checksum before applying it.
 - **Remote state protections:** S3 encryption, versioning, public-access blocking, and state locking.
-- **Cost-aware design:** No NAT Gateway or EC2 instance is required for the core VPC provisioning workflow.
+- **Cost-aware design:** The core VPC provisioning workflow does not require a NAT Gateway or EC2 instance.
 
 ## Verified Results
 
-![Successful GitHub Actions run](assets/github-actions-success.png)
+### 1. Automated no-change workflow
 
-The documented successful workflow run was **Terraform CD – Reviewed Deployment, run #8**, on branch `main`, commit `216e75b`.
+[Successful GitHub Actions run](https://github.com/sandhiya760/agentic-aws-vpc-provisioning/blob/main/assets/github-actions-success.png)
 
-Verified results from the run and local test output:
+The previously documented successful workflow run was **Terraform CD – Reviewed Deployment, run #8**, on branch `main`, commit `216e75b`.
+
+Verified results from that run and the recorded local test output:
 
 - GitHub Actions workflow: **Success**
 - Automated Python tests: **29 passed**
@@ -107,7 +128,26 @@ Verified results from the run and local test output:
 - Infrastructure change detection: **Completed**
 - Apply stage: **Skipped because no infrastructure changes were detected**
 
-**Scope of this result:** this run demonstrates the successful no-change path of the workflow. It does not demonstrate that a plan containing infrastructure changes was applied. The apply stage was skipped, so no infrastructure modification was performed by this run.
+**Scope of this result:** Run #8 demonstrates the successful no-change path. Its apply stage was skipped, so that run did not modify infrastructure.
+
+### 2. Approval-gated deployment test
+
+A subsequent deployment test used a metadata-only change to the existing VPC to verify the protected deployment workflow.
+
+Verified results:
+
+- Terraform generated a plan containing **one in-place VPC update**.
+- The proposed change added the tag `ApprovalDemo = manual-approval-test`.
+- Resource additions: **0**
+- Resource destructions: **0**
+- Deterministic security checks: **Passed**
+- Gemini requirements review: **Passed**
+- GitHub production approval: **Approved**
+- AWS OIDC authentication: **Succeeded after correcting the IAM trust policy**
+- Deployment job: **Succeeded**
+- AWS VPC console: The `ApprovalDemo = manual-approval-test` tag was verified.
+
+**Scope of this result:** This test demonstrates a successful human-approved Terraform deployment of a metadata-only change to an existing VPC. It does not demonstrate the creation of additional infrastructure resources.
 
 ## Project Structure
 
@@ -132,20 +172,23 @@ agentic-aws-vpc-provisioning/
 └── README.md
 ```
 
-This lists the known core project files and README assets. Preserve any additional files that already exist in your local repository.
+This lists the known core project files and README assets. Preserve any additional files that already exist in the repository.
 
 ## Run Tests Locally
 
-```powershell
+Run the Python test suite:
+
+```bash
 python -m pytest -v
 ```
 
-Latest reported local result: **29 passed**.
+Previously reported local result: **29 passed**.
 
 Optional checks:
 
-```powershell
+```bash
 terraform fmt -check -recursive
+terraform validate
 git diff --check
 ```
 
@@ -159,12 +202,13 @@ git diff --check
 - Google Gemini LLM integration for requirements review
 - Structured AI output validation and fail-closed workflow behavior
 - Human approval gates and conditional deployment
+- Saved-plan integrity verification and controlled deployment
 
 ## Future Improvements
 
 - Add infrastructure drift detection.
-- Expand deterministic policy checks for more AWS security controls.
-- Publish a sanitized plan/review summary as a workflow artifact.
+- Expand deterministic policy checks for additional AWS security controls.
+- Publish a sanitized plan and review summary as a workflow artifact.
 - Add monitoring and operational visibility for deployed workloads.
 
 ## Repository
