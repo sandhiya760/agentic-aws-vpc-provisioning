@@ -35,6 +35,7 @@ resource "aws_vpc" "main" {
     Name        = "agentic-vpc"
     Environment = "development"
     ManagedBy   = "Terraform"
+    ApprovalDemo  = "manual-approval-test"
   }
 }
 
